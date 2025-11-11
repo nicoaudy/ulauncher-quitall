@@ -18,14 +18,24 @@
     },
     {
       "id": "graceful_mode",
-      "type": "bool",
+      "type": "select",
       "name": "Graceful Quit Mode",
       "description": "If enabled, attempts to close windows gracefully instead of killing processes.",
-      "default_value": "false"
+      "default_value": "false",
+      "values": [
+        {
+          "id": "true",
+          "name": "Enabled"
+        },
+        {
+          "id": "false",
+          "name": "Disabled"
+        }
+      ]
     },
     {
       "id": "exclude_list",
-      "type": "input",
+      "type": "text",
       "name": "Excluded Apps",
       "description": "Comma-separated list of app names that should never be quit (e.g. terminal,ulauncher)",
       "default_value": "ulauncher,gnome-shell,gnome-terminal"
