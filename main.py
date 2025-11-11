@@ -1,6 +1,5 @@
 import subprocess
 import shutil
-import os
 from ulauncher.api.client.Extension import Extension
 from ulauncher.api.client.EventListener import EventListener
 from ulauncher.api.shared.event import KeywordQueryEvent, ItemEnterEvent
@@ -23,25 +22,74 @@ def check_dependencies():
     return shutil.which("wmctrl") is not None
 
 
+def get_window_pids():
+    """Get PIDs of windows using xdotool (more reliable than wmctrl -lp)"""
+    try:
+        # Get all visible window IDs
+        result = subprocess.run(
+            ["xdotool", "search", "--onlyvisible", "--class", ""],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+
+        if result.returncode != 0:
+            return set()
+
+        window_ids = [wid.strip() for wid in result.stdout.split() if wid.strip()]
+        pids = set()
+
+        for wid in window_ids:
+            try:
+                pid_result = subprocess.run(
+                    ["xdotool", "getwindowpid", wid],
+                    capture_output=True,
+                    text=True,
+                    timeout=2,
+                )
+                if pid_result.returncode == 0:
+                    pid = pid_result.stdout.strip()
+                    if pid.isdigit():
+                        pids.add(pid)
+            except Exception:
+                continue
+
+        return pids
+    except Exception:
+        return set()
+
+
 def get_open_apps(exclude_list):
     """Return a list of unique app process names that have open windows"""
-    if not check_dependencies():
-        return None
+    # Try xdotool first (more reliable)
+    pids = get_window_pids()
 
-    try:
-        result = subprocess.run(
-            ["wmctrl", "-lp"], capture_output=True, text=True, check=True, timeout=5
-        )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        return []
+    # Fallback to wmctrl if xdotool fails
+    if not pids:
+        try:
+            # Use wmctrl -lx to get class names directly
+            result = subprocess.run(
+                ["wmctrl", "-lx"], capture_output=True, text=True, timeout=5
+            )
 
-    pids = set()
-    for line in result.stdout.splitlines():
-        if line.strip():
-            parts = line.split()
-            if len(parts) >= 3:
-                pids.add(parts[2])
+            # Extract class names (format: window_id desktop class hostname title)
+            classes = set()
+            for line in result.stdout.splitlines():
+                if line.strip():
+                    parts = line.split(None, 4)
+                    if len(parts) >= 3:
+                        # Class is in format: instance.class
+                        class_full = parts[2]
+                        class_name = class_full.split(".")[0].lower()
+                        if class_name and class_name not in exclude_list:
+                            classes.add(class_name)
 
+            return sorted(list(classes))
+
+        except Exception:
+            return []
+
+    # Get process names from PIDs
     apps = set()
     for pid in pids:
         try:
@@ -50,7 +98,7 @@ def get_open_apps(exclude_list):
             ).strip()
             if cmd and cmd not in exclude_list:
                 apps.add(cmd)
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        except Exception:
             continue
 
     return sorted(list(apps))
@@ -58,15 +106,30 @@ def get_open_apps(exclude_list):
 
 class KeywordQueryEventListener(EventListener):
     def on_event(self, event, extension):
-        # Check if wmctrl is installed
-        if not check_dependencies():
-            install_cmd = "sudo apt install wmctrl"
+        # Check if required tools are installed
+        has_wmctrl = shutil.which("wmctrl") is not None
+        has_xdotool = shutil.which("xdotool") is not None
+
+        if not has_wmctrl and not has_xdotool:
+            install_cmd = "sudo apt install wmctrl xdotool"
             return RenderResultListAction(
                 [
                     ExtensionResultItem(
                         icon="images/icon.png",
-                        name="⚠️ wmctrl not installed",
-                        description="Click to copy installation command",
+                        name="⚠️ Missing dependencies",
+                        description="Click to copy: sudo apt install wmctrl xdotool",
+                        on_enter=CopyToClipboardAction(install_cmd),
+                    ),
+                ]
+            )
+        elif not has_xdotool:
+            install_cmd = "sudo apt install xdotool"
+            return RenderResultListAction(
+                [
+                    ExtensionResultItem(
+                        icon="images/icon.png",
+                        name="⚠️ xdotool recommended",
+                        description="Click to copy: sudo apt install xdotool (for better detection)",
                         on_enter=CopyToClipboardAction(install_cmd),
                     ),
                 ]
@@ -74,7 +137,9 @@ class KeywordQueryEventListener(EventListener):
 
         # Get excluded apps from preferences
         exclude_pref = extension.preferences.get("exclude_list", "")
-        exclude_list = {app.strip() for app in exclude_pref.split(",") if app.strip()}
+        exclude_list = {
+            app.strip().lower() for app in exclude_pref.split(",") if app.strip()
+        }
 
         # Add essential system processes that should never be killed
         exclude_list.update(
@@ -93,24 +158,20 @@ class KeywordQueryEventListener(EventListener):
                 "kwin_wayland",
                 "xfwm4",
                 "xfce4-panel",
-                "Xorg",
-                "Xwayland",
+                "xorg",
+                "xwayland",
+                "nautilus",
+                "dolphin",
+                "thunar",
+                "pcmanfm",
+                "kworker",
+                "rcu_gp",
+                "kthreadd",
+                "migration",  # Kernel threads
             }
         )
 
         open_apps = get_open_apps(exclude_list)
-
-        # Handle error case
-        if open_apps is None:
-            return RenderResultListAction(
-                [
-                    ExtensionResultItem(
-                        icon="images/icon.png",
-                        name="Error checking dependencies",
-                        description="Please restart Ulauncher",
-                    )
-                ]
-            )
 
         if not open_apps:
             return RenderResultListAction(
@@ -153,21 +214,51 @@ class ItemEnterEventListener(EventListener):
         if not apps:
             return HideWindowAction()
 
-        # Quit each app
+        # Quit each app using multiple methods
         for app in apps:
+            # Method 1: Try pkill with exact match
             try:
-                # Use pkill with exact match
                 subprocess.run(
-                    ["pkill", "-x", app], timeout=2, stderr=subprocess.DEVNULL
+                    ["pkill", "-x", app],
+                    timeout=2,
+                    stderr=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
                 )
             except Exception:
-                # Try killall as backup
-                try:
-                    subprocess.run(
-                        ["killall", app], timeout=2, stderr=subprocess.DEVNULL
-                    )
-                except Exception:
-                    pass
+                pass
+
+            # Method 2: Try pkill with case-insensitive partial match
+            try:
+                subprocess.run(
+                    ["pkill", "-i", app],
+                    timeout=2,
+                    stderr=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                )
+            except Exception:
+                pass
+
+            # Method 3: Try killall
+            try:
+                subprocess.run(
+                    ["killall", "-q", app],
+                    timeout=2,
+                    stderr=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                )
+            except Exception:
+                pass
+
+            # Method 4: For apps with capital letters (like Slack, Chrome)
+            try:
+                subprocess.run(
+                    ["killall", "-q", app.capitalize()],
+                    timeout=2,
+                    stderr=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                )
+            except Exception:
+                pass
 
         return HideWindowAction()
 
