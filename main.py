@@ -1,11 +1,13 @@
 import subprocess
 import shutil
+import os
 from ulauncher.api.client.Extension import Extension
 from ulauncher.api.client.EventListener import EventListener
-from ulauncher.api.shared.event import KeywordQueryEvent
+from ulauncher.api.shared.event import KeywordQueryEvent, ItemEnterEvent
 from ulauncher.api.shared.item.ExtensionResultItem import ExtensionResultItem
 from ulauncher.api.shared.action.RenderResultListAction import RenderResultListAction
-from ulauncher.api.shared.action.RunScriptAction import RunScriptAction
+from ulauncher.api.shared.action.ExtensionCustomAction import ExtensionCustomAction
+from ulauncher.api.shared.action.HideWindowAction import HideWindowAction
 from ulauncher.api.shared.action.CopyToClipboardAction import CopyToClipboardAction
 
 
@@ -13,6 +15,7 @@ class QuitAllAppsExtension(Extension):
     def __init__(self):
         super().__init__()
         self.subscribe(KeywordQueryEvent, KeywordQueryEventListener())
+        self.subscribe(ItemEnterEvent, ItemEnterEventListener())
 
 
 def check_dependencies():
@@ -66,12 +69,6 @@ class KeywordQueryEventListener(EventListener):
                         description="Click to copy installation command",
                         on_enter=CopyToClipboardAction(install_cmd),
                     ),
-                    ExtensionResultItem(
-                        icon="images/icon.png",
-                        name="Installation command:",
-                        description=install_cmd,
-                        on_enter=CopyToClipboardAction(install_cmd),
-                    ),
                 ]
             )
 
@@ -85,13 +82,19 @@ class KeywordQueryEventListener(EventListener):
                 "ulauncher",
                 "gnome-shell",
                 "gnome-terminal",
+                "konsole",
+                "terminator",
                 "x-terminal-emulator",
                 "systemd",
                 "dbus-daemon",
+                "dbus-broker",
                 "plasmashell",
                 "kwin_x11",
+                "kwin_wayland",
                 "xfwm4",
                 "xfce4-panel",
+                "Xorg",
+                "Xwayland",
             }
         )
 
@@ -120,17 +123,7 @@ class KeywordQueryEventListener(EventListener):
                 ]
             )
 
-        # Create a bash script to kill all apps
-        # Use pkill -x for exact matching (safer than -f)
-        kill_commands = []
-        for app in open_apps:
-            # Escape single quotes in app names
-            safe_app = app.replace("'", "'\\''")
-            kill_commands.append(f"pkill -x '{safe_app}' 2>/dev/null")
-
-        # Join with ; and wrap in bash -c
-        quit_script = f'bash -c "{"; ".join(kill_commands)}"'
-
+        # Return action that will trigger the quit
         return RenderResultListAction(
             [
                 ExtensionResultItem(
@@ -138,10 +131,45 @@ class KeywordQueryEventListener(EventListener):
                     name=f"🚫 Quit {len(open_apps)} open app{'s' if len(open_apps) > 1 else ''}",
                     description=", ".join(open_apps[:8])
                     + ("..." if len(open_apps) > 8 else ""),
-                    on_enter=RunScriptAction(quit_script),
+                    on_enter=ExtensionCustomAction(
+                        {"action": "quit_apps", "apps": open_apps}
+                    ),
                 )
             ]
         )
+
+
+class ItemEnterEventListener(EventListener):
+    """Handles the actual quitting of apps when user presses Enter"""
+
+    def on_event(self, event, extension):
+        data = event.get_data()
+
+        if data.get("action") != "quit_apps":
+            return
+
+        apps = data.get("apps", [])
+
+        if not apps:
+            return HideWindowAction()
+
+        # Quit each app
+        for app in apps:
+            try:
+                # Use pkill with exact match
+                subprocess.run(
+                    ["pkill", "-x", app], timeout=2, stderr=subprocess.DEVNULL
+                )
+            except Exception:
+                # Try killall as backup
+                try:
+                    subprocess.run(
+                        ["killall", app], timeout=2, stderr=subprocess.DEVNULL
+                    )
+                except Exception:
+                    pass
+
+        return HideWindowAction()
 
 
 if __name__ == "__main__":
