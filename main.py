@@ -1,5 +1,6 @@
 import subprocess
 import shutil
+import time
 from ulauncher.api.client.Extension import Extension
 from ulauncher.api.client.EventListener import EventListener
 from ulauncher.api.shared.event import KeywordQueryEvent, ItemEnterEvent
@@ -17,22 +18,15 @@ class QuitAllAppsExtension(Extension):
         self.subscribe(ItemEnterEvent, ItemEnterEventListener())
 
 
-def check_dependencies():
-    """Check if wmctrl is installed"""
-    return shutil.which("wmctrl") is not None
-
-
 def get_window_pids():
-    """Get PIDs of windows using xdotool (more reliable than wmctrl -lp)"""
+    """Get PIDs of visible windows using xdotool"""
     try:
-        # Get all visible window IDs
         result = subprocess.run(
             ["xdotool", "search", "--onlyvisible", "--class", ""],
             capture_output=True,
             text=True,
             timeout=5,
         )
-
         if result.returncode != 0:
             return set()
 
@@ -40,19 +34,16 @@ def get_window_pids():
         pids = set()
 
         for wid in window_ids:
-            try:
-                pid_result = subprocess.run(
-                    ["xdotool", "getwindowpid", wid],
-                    capture_output=True,
-                    text=True,
-                    timeout=2,
-                )
-                if pid_result.returncode == 0:
-                    pid = pid_result.stdout.strip()
-                    if pid.isdigit():
-                        pids.add(pid)
-            except Exception:
-                continue
+            pid_result = subprocess.run(
+                ["xdotool", "getwindowpid", wid],
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+            if pid_result.returncode == 0:
+                pid = pid_result.stdout.strip()
+                if pid.isdigit():
+                    pids.add(pid)
 
         return pids
     except Exception:
@@ -60,36 +51,27 @@ def get_window_pids():
 
 
 def get_open_apps(exclude_list):
-    """Return a list of unique app process names that have open windows"""
-    # Try xdotool first (more reliable)
+    """Return a list of app process names with open windows"""
     pids = get_window_pids()
 
-    # Fallback to wmctrl if xdotool fails
     if not pids:
         try:
-            # Use wmctrl -lx to get class names directly
             result = subprocess.run(
                 ["wmctrl", "-lx"], capture_output=True, text=True, timeout=5
             )
-
-            # Extract class names (format: window_id desktop class hostname title)
             classes = set()
             for line in result.stdout.splitlines():
                 if line.strip():
                     parts = line.split(None, 4)
                     if len(parts) >= 3:
-                        # Class is in format: instance.class
                         class_full = parts[2]
                         class_name = class_full.split(".")[0].lower()
                         if class_name and class_name not in exclude_list:
                             classes.add(class_name)
-
             return sorted(list(classes))
-
         except Exception:
             return []
 
-    # Get process names from PIDs
     apps = set()
     for pid in pids:
         try:
@@ -104,9 +86,27 @@ def get_open_apps(exclude_list):
     return sorted(list(apps))
 
 
+def force_kill(app):
+    """Try graceful kill first, then force if still alive"""
+    try:
+        # Try normal TERM signal
+        subprocess.run(
+            ["pkill", "-TERM", "-i", app], timeout=2, stderr=subprocess.DEVNULL
+        )
+        time.sleep(0.5)
+        # Check if still alive
+        check = subprocess.run(["pgrep", "-i", app], capture_output=True, text=True)
+        if check.returncode == 0:
+            # Force kill remaining processes
+            subprocess.run(
+                ["pkill", "-9", "-i", app], timeout=2, stderr=subprocess.DEVNULL
+            )
+    except Exception:
+        pass
+
+
 class KeywordQueryEventListener(EventListener):
     def on_event(self, event, extension):
-        # Check if required tools are installed
         has_wmctrl = shutil.which("wmctrl") is not None
         has_xdotool = shutil.which("xdotool") is not None
 
@@ -122,26 +122,12 @@ class KeywordQueryEventListener(EventListener):
                     ),
                 ]
             )
-        elif not has_xdotool:
-            install_cmd = "sudo apt install xdotool"
-            return RenderResultListAction(
-                [
-                    ExtensionResultItem(
-                        icon="images/icon.png",
-                        name="⚠️ xdotool recommended",
-                        description="Click to copy: sudo apt install xdotool (for better detection)",
-                        on_enter=CopyToClipboardAction(install_cmd),
-                    ),
-                ]
-            )
 
-        # Get excluded apps from preferences
         exclude_pref = extension.preferences.get("exclude_list", "")
         exclude_list = {
             app.strip().lower() for app in exclude_pref.split(",") if app.strip()
         }
 
-        # Add essential system processes that should never be killed
         exclude_list.update(
             {
                 "ulauncher",
@@ -167,7 +153,7 @@ class KeywordQueryEventListener(EventListener):
                 "kworker",
                 "rcu_gp",
                 "kthreadd",
-                "migration",  # Kernel threads
+                "migration",
             }
         )
 
@@ -184,7 +170,6 @@ class KeywordQueryEventListener(EventListener):
                 ]
             )
 
-        # Return action that will trigger the quit
         return RenderResultListAction(
             [
                 ExtensionResultItem(
@@ -201,64 +186,19 @@ class KeywordQueryEventListener(EventListener):
 
 
 class ItemEnterEventListener(EventListener):
-    """Handles the actual quitting of apps when user presses Enter"""
+    """Handles quitting apps when user presses Enter"""
 
     def on_event(self, event, extension):
         data = event.get_data()
-
         if data.get("action") != "quit_apps":
             return
 
         apps = data.get("apps", [])
-
         if not apps:
             return HideWindowAction()
 
-        # Quit each app using multiple methods
         for app in apps:
-            # Method 1: Try pkill with exact match
-            try:
-                subprocess.run(
-                    ["pkill", "-x", app],
-                    timeout=2,
-                    stderr=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                )
-            except Exception:
-                pass
-
-            # Method 2: Try pkill with case-insensitive partial match
-            try:
-                subprocess.run(
-                    ["pkill", "-i", app],
-                    timeout=2,
-                    stderr=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                )
-            except Exception:
-                pass
-
-            # Method 3: Try killall
-            try:
-                subprocess.run(
-                    ["killall", "-q", app],
-                    timeout=2,
-                    stderr=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                )
-            except Exception:
-                pass
-
-            # Method 4: For apps with capital letters (like Slack, Chrome)
-            try:
-                subprocess.run(
-                    ["killall", "-q", app.capitalize()],
-                    timeout=2,
-                    stderr=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                )
-            except Exception:
-                pass
+            force_kill(app)
 
         return HideWindowAction()
 
