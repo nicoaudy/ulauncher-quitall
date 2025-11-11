@@ -5,7 +5,6 @@
   "description": "Quickly quit all open GUI applications (like Raycast’s Quit All Apps).",
   "developer_name": "Nico Audy",
   "icon": "images/icon.png",
-  "options": [],
   "preferences": [
     {
       "id": "keyword",
@@ -13,23 +12,6 @@
       "name": "Activation Keyword",
       "description": "Type this keyword to activate the extension",
       "default_value": "quitall"
-    },
-    {
-      "id": "graceful_mode",
-      "type": "select",
-      "name": "Graceful Quit Mode",
-      "description": "If enabled, attempts to close windows gracefully instead of killing processes.",
-      "default_value": "false",
-      "values": [
-        {
-          "id": "true",
-          "name": "Enabled"
-        },
-        {
-          "id": "false",
-          "name": "Disabled"
-        }
-      ]
     },
     {
       "id": "exclude_list",
