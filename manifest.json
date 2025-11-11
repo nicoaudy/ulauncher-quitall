@@ -1,7 +1,8 @@
 {
+  "required_api_version": "2",
   "id": "com.github.nicoaudy.ulauncher-quitall",
   "name": "Quit All Apps",
-  "description": "Quickly quit all open GUI applications, similar to Raycast’s Quit All Apps on macOS.",
+  "description": "Quickly quit all open GUI applications (like Raycast’s Quit All Apps).",
   "developer_name": "Nico Audy",
   "icon": "images/icon.png",
   "options": {
@@ -12,8 +13,22 @@
       "id": "keyword",
       "type": "keyword",
       "name": "Activation Keyword",
-      "description": "Keyword to trigger the extension (e.g., 'quit' or 'close')",
-      "default_value": "qa"
+      "description": "Type this keyword to activate the extension",
+      "default_value": "quitall"
+    },
+    {
+      "id": "graceful_mode",
+      "type": "bool",
+      "name": "Graceful Quit Mode",
+      "description": "If enabled, attempts to close windows gracefully instead of killing processes.",
+      "default_value": "false"
+    },
+    {
+      "id": "exclude_list",
+      "type": "input",
+      "name": "Excluded Apps",
+      "description": "Comma-separated list of app names that should never be quit (e.g. terminal,ulauncher)",
+      "default_value": "ulauncher,gnome-shell,gnome-terminal"
     }
   ]
 }
