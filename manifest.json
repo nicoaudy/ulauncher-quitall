@@ -5,9 +5,7 @@
   "description": "Quickly quit all open GUI applications (like Raycast’s Quit All Apps).",
   "developer_name": "Nico Audy",
   "icon": "images/icon.png",
-  "options": {
-    "query_debounce": 0.05
-  },
+  "options": [],
   "preferences": [
     {
       "id": "keyword",
