@@ -1,0 +1,19 @@
+{
+  "id": "com.github.nicoaudy.ulauncher-quitall",
+  "name": "Quit All Apps",
+  "description": "Quickly quit all open GUI applications, similar to Raycast’s Quit All Apps on macOS.",
+  "developer_name": "Nico Audy",
+  "icon": "images/icon.png",
+  "options": {
+    "query_debounce": 0.05
+  },
+  "preferences": [
+    {
+      "id": "keyword",
+      "type": "keyword",
+      "name": "Activation Keyword",
+      "description": "Keyword to trigger the extension (e.g., 'quit' or 'close')",
+      "default_value": "qa"
+    }
+  ]
+}
